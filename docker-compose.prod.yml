@@ -1,0 +1,59 @@
+# docker-compose.prod.yml — Production-like local environment
+# Usage:
+#   cp .env.example .env && edit .env
+#   RUN_SEED=true docker compose -f docker-compose.prod.yml up --build
+#
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: erp_mdv
+      POSTGRES_USER: ${DB_USER:-erp_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-erp_pass_trocar}
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-erp_user} -d erp_mdv']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./apps/backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - '3001:3001'
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-erp_user}:${DB_PASSWORD:-erp_pass_trocar}@postgres:5432/erp_mdv?schema=public
+      JWT_SECRET: ${JWT_SECRET:-trocar-em-producao-openssl-rand-hex-32}
+      BACKEND_CORS_ORIGIN: http://localhost:3000,http://frontend:3000
+      NODE_ENV: production
+      BACKEND_PORT: 3001
+      RUN_SEED: ${RUN_SEED:-false}
+      ADMIN_DEFAULT_PASSWORD: ${ADMIN_DEFAULT_PASSWORD:-mdv@2026!}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+  frontend:
+    build:
+      context: ./apps/frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3001
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+
+volumes:
+  pgdata:
