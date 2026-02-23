@@ -1,0 +1,303 @@
+// ═══════════════════════════════════════════════════════════════
+// PARTE B — SCHEMA DELTA
+// Arquivo: schema-financial-delta.prisma
+//
+// INSTRUÇÕES:
+//   1. Substituir model ChartAccount inteiro pelo MasterAccount abaixo
+//   2. Adicionar os novos enums ANTES dos models
+//   3. Adicionar UnitAccount, LedgerEntry, CashMovement após MasterAccount
+//   4. Aplicar diffs no Payable e Receivable
+//   5. Adicionar relations na Unit
+// ═══════════════════════════════════════════════════════════════
+
+
+// ════════════════════════════════════════
+// NOVOS ENUMS
+// ════════════════════════════════════════
+
+/// Natureza contábil — define se a conta aumenta receita ou despesa
+enum AccountNature {
+  RECEITA       // código 3.x — créditos na DRE
+  DESPESA       // código 4.x — débitos na DRE
+  PATRIMONIO    // código 1.x/2.x — balanço (não entra na DRE)
+}
+
+/// Seção da DRE onde a conta se encaixa.
+/// A DRE é montada na ORDEM deste enum.
+/// Cada master_account tem exatamente 1 dre_section.
+enum DreSection {
+  // ── RECEITAS ──
+  RECEITA_BRUTA               // (+) Faturamento bruto
+  DEDUCOES_RECEITA            // (-) Impostos, devoluções, glosas
+  // = RECEITA LÍQUIDA
+
+  // ── CUSTOS ──
+  CUSTO_SERVICO               // (-) Custos diretos do serviço
+  // = LUCRO BRUTO
+
+  // ── DESPESAS OPERACIONAIS ──
+  DESPESA_PESSOAL             // (-) Folha, encargos, benefícios
+  DESPESA_ADMINISTRATIVA      // (-) Aluguel, TI, jurídico, contábil
+  DESPESA_COMERCIAL           // (-) Marketing, comissões
+  DESPESA_OCUPACAO            // (-) IPTU, condomínio, manutenção predial
+  DESPESA_FINANCEIRA          // (-) Juros, tarifas bancárias, IOF
+  RECEITA_FINANCEIRA          // (+) Rendimentos, descontos obtidos
+  OUTRAS_RECEITAS             // (+) Receitas não operacionais
+  OUTRAS_DESPESAS             // (-) Despesas não operacionais
+
+  // = EBITDA
+  DEPRECIACAO_AMORTIZACAO     // (-) D&A
+
+  // = RESULTADO ANTES IR
+  IMPOSTOS_RESULTADO          // (-) IRPJ, CSLL
+
+  // = RESULTADO LÍQUIDO
+
+  // ── PATRIMÔNIO (não entra na DRE) ──
+  NAO_DRE                     // Contas patrimoniais
+}
+
+/// Tipo de lançamento contábil (partidas dobradas simplificadas)
+enum LedgerType {
+  DEBIT         // Débito: aumenta despesa/ativo, diminui receita/passivo
+  CREDIT        // Crédito: aumenta receita/passivo, diminui despesa/ativo
+}
+
+/// Direção do movimento de caixa
+enum CashDirection {
+  IN            // Entrada (recebimento)
+  OUT           // Saída (pagamento)
+}
+
+/// Status do lançamento contábil
+enum EntryStatus {
+  POSTED        // Lançado (contabilizado)
+  REVERSED      // Estornado (contra-lançamento gerado)
+}
+
+/// Origem polimórfica do lançamento
+enum SourceType {
+  PAYABLE       // Vindo de Contas a Pagar
+  RECEIVABLE    // Vindo de Contas a Receber
+  MANUAL        // Lançamento manual (ajuste)
+}
+
+
+// ════════════════════════════════════════
+// MODEL: MasterAccount
+// SUBSTITUI: ChartAccount
+// @@map("master_accounts") — migration renomeia chart_accounts → master_accounts
+// ════════════════════════════════════════
+
+/// Plano de Contas MESTRE do grupo.
+/// Sem unit_id — é global.
+/// Hierárquico: parent_id → self-relation até 5 níveis.
+/// is_locked = true por padrão → só admin grupo altera.
+/// DRE calculada por dre_section + nature.
+model MasterAccount {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code        String         @unique @db.VarChar(20)    // "3.1.01.001" — hierárquico
+  name        String         @db.VarChar(200)           // "Consultas Particulares"
+  nature      AccountNature                             // RECEITA / DESPESA / PATRIMONIO
+  dre_section DreSection     @default(NAO_DRE)          // onde aparece na DRE
+  parent_id   String?        @db.Uuid                   // self-ref hierarquia
+  level       Int            @default(1)                // 1=grupo, 2=subgrupo, ... 5=analítica
+  is_group    Boolean        @default(false)            // true = agrupador, false = analítica
+  is_active   Boolean        @default(true)
+  is_locked   Boolean        @default(true)             // governança: só admin grupo
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+
+  // Self-relation
+  parent   MasterAccount?  @relation("AccountHierarchy", fields: [parent_id], references: [id])
+  children MasterAccount[] @relation("AccountHierarchy")
+
+  // Downstream
+  unit_accounts UnitAccount[]
+
+  @@index([parent_id], name: "idx_master_accounts_parent")
+  @@index([dre_section], name: "idx_master_accounts_dre")
+  @@index([nature], name: "idx_master_accounts_nature")
+  @@map("master_accounts")
+}
+
+
+// ════════════════════════════════════════
+// MODEL: UnitAccount
+// NOVO
+// ════════════════════════════════════════
+
+/// Plano de Contas POR UNIDADE.
+/// Sempre referencia um MasterAccount (obrigatório).
+/// Permite nome customizado por unidade.
+/// Unique(unit_id, master_account_id) — 1:1 mapping.
+model UnitAccount {
+  id                String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id           String  @db.Uuid
+  master_account_id String  @db.Uuid
+  custom_name       String? @db.VarChar(200)           // sobrescreve nome do master se preenchido
+  is_active         Boolean @default(true)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  // Relations
+  unit           Unit           @relation(fields: [unit_id], references: [id])
+  master_account MasterAccount  @relation(fields: [master_account_id], references: [id])
+
+  // Downstream
+  payables        Payable[]
+  receivables     Receivable[]
+  ledger_entries  LedgerEntry[]
+  cash_movements  CashMovement[]
+
+  @@unique([unit_id, master_account_id], name: "uq_unit_master_account")
+  @@index([unit_id], name: "idx_unit_accounts_unit")
+  @@index([master_account_id], name: "idx_unit_accounts_master")
+  @@map("unit_accounts")
+}
+
+
+// ════════════════════════════════════════
+// MODEL: LedgerEntry
+// NOVO — Camada contábil por competência (DRE)
+// ════════════════════════════════════════
+
+/// Lançamento contábil.
+/// Gerado automaticamente ao aprovar AP ou lançar AR.
+/// APPEND-ONLY: para estornar, cria contra-lançamento.
+/// Unique(source_type, source_id) — garante idempotência.
+model LedgerEntry {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id         String      @db.Uuid
+  unit_account_id String      @db.Uuid
+  competence      String      @db.VarChar(7)            // "2026-01"
+  entry_date      DateTime    @db.Date                  // data do lançamento
+  amount          Decimal     @db.Decimal(15, 2)        // sempre positivo
+  type            LedgerType                            // DEBIT ou CREDIT
+  status          EntryStatus @default(POSTED)
+
+  // Origem polimórfica
+  source_type     SourceType                            // PAYABLE / RECEIVABLE / MANUAL
+  source_id       String      @db.Uuid                  // FK para payable.id ou receivable.id
+
+  description     String?     @db.VarChar(300)
+  posted_by       String      @db.Uuid                  // user_id que gerou
+
+  // Estorno
+  reversed_by_id  String?     @db.Uuid                  // aponta para o contra-lançamento
+  reversal_reason String?     @db.VarChar(300)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  // Relations
+  unit         Unit         @relation(fields: [unit_id], references: [id])
+  unit_account UnitAccount  @relation(fields: [unit_account_id], references: [id])
+  posted_user  SystemUser   @relation("LedgerPostedBy", fields: [posted_by], references: [id])
+  reversed_by  LedgerEntry? @relation("LedgerReversal", fields: [reversed_by_id], references: [id])
+  reversal_of  LedgerEntry? @relation("LedgerReversal")
+
+  // IDEMPOTÊNCIA: 1 lançamento por (source_type, source_id)
+  // Se source_type=PAYABLE e source_id=<payable_id>, só pode existir 1 POSTED
+  @@unique([source_type, source_id], name: "uq_ledger_source")
+
+  @@index([unit_id, competence], name: "idx_ledger_unit_comp")
+  @@index([unit_account_id], name: "idx_ledger_account")
+  @@index([source_type, source_id], name: "idx_ledger_source")
+  @@index([competence, status], name: "idx_ledger_comp_status")
+  @@map("ledger_entries")
+}
+
+
+// ════════════════════════════════════════
+// MODEL: CashMovement
+// NOVO — Camada de caixa (fluxo de caixa)
+// ════════════════════════════════════════
+
+/// Movimento de caixa.
+/// Gerado automaticamente ao pagar AP ou receber AR.
+/// Vinculado a bank_account para conciliação.
+/// Unique(source_type, source_id) — garante idempotência.
+model CashMovement {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id         String        @db.Uuid
+  unit_account_id String        @db.Uuid
+  bank_account_id String?       @db.Uuid                // conta bancária (opcional se caixa físico)
+  movement_date   DateTime      @db.Date                // data efetiva do pagamento/recebimento
+  amount          Decimal       @db.Decimal(15, 2)      // sempre positivo
+  direction       CashDirection                         // IN ou OUT
+  payment_method  PaymentMethod                         // PIX, BOLETO, etc.
+
+  // Origem polimórfica
+  source_type     SourceType                            // PAYABLE / RECEIVABLE / MANUAL
+  source_id       String        @db.Uuid
+
+  description     String?       @db.VarChar(300)
+  recorded_by     String        @db.Uuid                // user_id
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  // Relations
+  unit          Unit          @relation(fields: [unit_id], references: [id])
+  unit_account  UnitAccount   @relation(fields: [unit_account_id], references: [id])
+  bank_account  BankAccount?  @relation(fields: [bank_account_id], references: [id])
+  recorded_user SystemUser    @relation("CashRecordedBy", fields: [recorded_by], references: [id])
+
+  // IDEMPOTÊNCIA: 1 movimento por (source_type, source_id)
+  @@unique([source_type, source_id], name: "uq_cash_source")
+
+  @@index([unit_id, movement_date], name: "idx_cash_unit_date")
+  @@index([unit_account_id], name: "idx_cash_account")
+  @@index([bank_account_id], name: "idx_cash_bank")
+  @@index([source_type, source_id], name: "idx_cash_source")
+  @@map("cash_movements")
+}
+
+
+// ════════════════════════════════════════
+// DIFFS EM MODELS EXISTENTES
+// ════════════════════════════════════════
+
+// ── Payable: trocar chart_account por unit_account ──
+//
+// REMOVER:
+//   account_id    String?  @db.Uuid
+//   chart_account ChartAccount? @relation(fields: [account_id], references: [id])
+//
+// ADICIONAR:
+//   unit_account_id  String?       @db.Uuid
+//   unit_account     UnitAccount?  @relation(fields: [unit_account_id], references: [id])
+//
+// ÍNDICE NOVO:
+//   @@index([unit_account_id], name: "idx_payables_account")
+
+// ── Receivable: adicionar unit_account ──
+//
+// ADICIONAR:
+//   unit_account_id  String?       @db.Uuid
+//   unit_account     UnitAccount?  @relation(fields: [unit_account_id], references: [id])
+//
+// ÍNDICE NOVO:
+//   @@index([unit_account_id], name: "idx_receivables_account")
+
+// ── Unit: adicionar relations ──
+//
+// ADICIONAR no model Unit:
+//   unit_accounts   UnitAccount[]
+//   ledger_entries  LedgerEntry[]
+//   cash_movements  CashMovement[]
+
+// ── SystemUser: adicionar relations ──
+//
+// ADICIONAR no model SystemUser:
+//   ledger_posted   LedgerEntry[]   @relation("LedgerPostedBy")
+//   cash_recorded   CashMovement[]  @relation("CashRecordedBy")
+
+// ── BankAccount: adicionar relation ──
+//
+// ADICIONAR no model BankAccount:
+//   cash_movements  CashMovement[]
+
+// ── REMOVER enum AccountType (substituído por AccountNature) ──
+// Se houver código que referencia AccountType, trocar para AccountNature.
