@@ -4,7 +4,7 @@
 
 databases:
   - name: erp-mdv-db
-    plan: starter
+    plan: basic-256mb
     databaseName: erp_mdv
     user: erp_user
 
