@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+}
+
+@layer utilities {
+  /* Drawer slide-in from right */
+  @keyframes slide-in-right {
+    from { transform: translateX(100%); opacity: 0.8; }
+    to   { transform: translateX(0);    opacity: 1; }
+  }
+  .animate-slide-in-right {
+    animation: slide-in-right 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+
+  /* Toast slide-up */
+  @keyframes slide-up {
+    from { transform: translateY(20px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+  }
+  .animate-slide-up {
+    animation: slide-up 0.25s ease-out;
+  }
+
+  /* Fade in for modals */
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  .animate-fade-in {
+    animation: fade-in 0.15s ease-out;
+  }
+
+  /* Card settle (after drag) */
+  @keyframes settle {
+    0%   { transform: scale(1.03); box-shadow: 0 4px 20px rgba(0,0,0,0.12); }
+    100% { transform: scale(1);    box-shadow: none; }
+  }
+  .animate-settle {
+    animation: settle 0.3s ease-out;
+  }
+
+  /* Kanban horizontal scroll with no scrollbar */
+  .kanban-scroll::-webkit-scrollbar { height: 6px; }
+  .kanban-scroll::-webkit-scrollbar-track { background: transparent; }
+  .kanban-scroll::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+  .kanban-scroll::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+}
