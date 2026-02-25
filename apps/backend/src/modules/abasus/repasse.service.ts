@@ -5,7 +5,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { FinanceiroService } from '../financeiro/financeiro.service';
 
-interface BreakdownItem { qty: number; unit_value: number; total: number; }
+export interface BreakdownItem { qty: number; unit_value: number; total: number; }
 type Breakdown = Record<string, BreakdownItem>;
 
 interface EmployeeAccum {
@@ -16,8 +16,8 @@ interface EmployeeAccum {
   total: number;
 }
 
-interface MissingRule { procedure_key: string; role: string; qty: number; }
-interface SemVinculo { type: string; id: string; doctor_name: string; qty: number; }
+export interface MissingRule { procedure_key: string; role: string; qty: number; }
+export interface SemVinculo { type: string; id: string; doctor_name: string; qty: number; }
 
 @Injectable()
 export class RepasseService {
@@ -420,6 +420,56 @@ export class RepasseService {
       });
     }
     return supplier;
+  }
+
+  // ══════════════════════════════════════════════
+  // HISTORY (all past runs for a unit)
+  // ══════════════════════════════════════════════
+
+  async listHistory(unitId: string) {
+    const runs = await this.prisma.susRepasseRun.findMany({
+      where: { unit_id: unitId },
+      include: {
+        employee: { select: { id: true, name: true, role: true } },
+        payable: { select: { id: true, status: true, value: true } },
+      },
+      orderBy: [{ competence: 'desc' }, { employee_name: 'asc' }],
+    });
+
+    // Group by competence
+    const grouped: Record<string, {
+      competence: string;
+      total: number;
+      runs: typeof runs;
+    }> = {};
+
+    for (const r of runs) {
+      if (!grouped[r.competence]) {
+        grouped[r.competence] = { competence: r.competence, total: 0, runs: [] };
+      }
+      grouped[r.competence].total += Number(r.total_value);
+      grouped[r.competence].runs.push(r);
+    }
+
+    return Object.values(grouped)
+      .sort((a, b) => b.competence.localeCompare(a.competence))
+      .map((g) => ({
+        competence: g.competence,
+        total: g.total,
+        employee_count: g.runs.length,
+        runs: g.runs.map((r) => ({
+          id: r.id,
+          employee_id: r.employee_id,
+          employee_name: r.employee_name,
+          role: r.role,
+          total_value: Number(r.total_value),
+          breakdown: JSON.parse(r.breakdown),
+          payable_id: r.payable_id,
+          payable: r.payable,
+          status: r.status,
+          created_at: r.created_at,
+        })),
+      }));
   }
 
   // ══════════════════════════════════════════════

@@ -41,7 +41,7 @@ export class ProductionController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
   ) {
-    return this.service.list(unitId, { type, competence, doctorId, status, search, page, limit });
+    return this.service.list(unitId, { type, competence, doctorId, status, search, page: page ?? 1, limit: limit ?? 50 });
   }
 
   // ── GET BY ID ──

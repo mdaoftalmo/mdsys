@@ -111,7 +111,7 @@ async function main() {
   for (const unit of units) {
     for (const a of analyticAccounts) {
       await prisma.unitAccount.upsert({
-        where: { uq_unit_master: { unit_id: unit.id, master_account_id: codeToId[a.code] } },
+        where: { uq_unit_master_account: { unit_id: unit.id, master_account_id: codeToId[a.code] } },
         update: {},
         create: { unit_id: unit.id, master_account_id: codeToId[a.code] },
       });
@@ -136,7 +136,7 @@ async function main() {
   const bank = await prisma.bankAccount.upsert({
     where: { id: '00000000-0000-0000-0000-000000000001' },
     update: {},
-    create: { id: '00000000-0000-0000-0000-000000000001', unit_id: units[0].id, bank_name: 'Bradesco', bank_code: '237', agency: '1234', account_number: '56789-0', is_main: true },
+    create: { id: '00000000-0000-0000-0000-000000000001', unit_id: units[0].id, bank_name: 'Bradesco', bank_code: '237', agency: '1234', account_number: '56789-0', account_type: 'corrente', is_main: true },
   });
   console.log('✅ bank account');
 
@@ -322,8 +322,10 @@ async function main() {
       update: {},
       create: {
         unit_id: u0, name: e.name, cpf: `000.000.000-${emps.indexOf(e) + 10}`,
-        role: e.role, status: 'ATIVO', hire_date: new Date('2024-01-15'),
+        role: e.role, status: 'ATIVO', admission_date: new Date('2024-01-15'),
         salary: e.crm ? 25000 : 4500,
+        department: e.crm ? 'Médico' : 'Administrativo',
+        type: e.crm ? 'PJ' : 'CLT',
       },
     });
   }

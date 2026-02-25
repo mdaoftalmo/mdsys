@@ -126,3 +126,7 @@ export async function fetchEmployees(unitId?: string): Promise<EmployeeOption[]>
     return (Array.isArray(res) ? res : []).map((e: any) => ({ id: e.id, name: e.name, role: e.role }));
   } catch { return []; }
 }
+
+export async function fetchRepasseHistory(unitId: string): Promise<any[]> {
+  return api.get<any[]>(`/abasus/repasse/history?unit_id=${unitId}`);
+}

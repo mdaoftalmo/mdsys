@@ -86,7 +86,7 @@ export class LedgerService {
       action: 'POST_AP',
       user_id: userId,
       unit_id: payable.unit_id,
-      before: null,
+      before: undefined,
       after: {
         ledger_id: entry.id,
         payable_id: payableId,
@@ -224,7 +224,7 @@ export class LedgerService {
       action: 'POST_AR',
       user_id: userId,
       unit_id: receivable.unit_id,
-      before: null,
+      before: undefined,
       after: {
         ledger_id: entry.id,
         receivable_id: receivableId,

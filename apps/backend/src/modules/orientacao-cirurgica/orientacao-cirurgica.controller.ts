@@ -56,7 +56,7 @@ export class OrientacaoCirurgicaController {
   async findById(
     @Param('id', ParseUUIDPipe) id: string,
     @UnitScope() unitId: string,
-  ) {
+  ): Promise<any> {
     return this.service.findById(id, unitId);
   }
 

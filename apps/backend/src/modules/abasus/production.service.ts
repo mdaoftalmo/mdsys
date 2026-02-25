@@ -360,22 +360,25 @@ export class ProductionService {
 
     // ── Type-specific validations ──
     if (record._type === 'CONSULTA') {
-      if (!record.doctor_name) throw new BadRequestException('Médico obrigatório para consulta');
-      if ((record.attendances || 0) + (record.returns || 0) === 0) {
+      const consulta = record as any;
+      if (!consulta.doctor_name) throw new BadRequestException('Médico obrigatório para consulta');
+      if ((consulta.attendances || 0) + (consulta.returns || 0) === 0) {
         throw new BadRequestException('Informe pelo menos 1 atendimento ou retorno');
       }
     }
 
     if (record._type === 'EXAME') {
-      if (!record.doctor_name) throw new BadRequestException('Médico obrigatório para exame');
-      if ((record.quantity || 0) < 1) throw new BadRequestException('Quantidade mínima: 1');
+      const exame = record as any;
+      if (!exame.doctor_name) throw new BadRequestException('Médico obrigatório para exame');
+      if ((exame.quantity || 0) < 1) throw new BadRequestException('Quantidade mínima: 1');
     }
 
     if (record._type === 'CIRURGIA') {
-      if (!record.doctor_name) throw new BadRequestException('Médico obrigatório para cirurgia');
-      if ((record.quantity || 0) < 1) throw new BadRequestException('Quantidade mínima: 1');
+      const cirurgia = record as any;
+      if (!cirurgia.doctor_name) throw new BadRequestException('Médico obrigatório para cirurgia');
+      if ((cirurgia.quantity || 0) < 1) throw new BadRequestException('Quantidade mínima: 1');
 
-      const subtype = record.surgery_subtype;
+      const subtype = cirurgia.surgery_subtype;
 
       if (subtype === 'CATARATA') {
         const hasLens = consumptions.some(c => {

@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { previewRepasse, runRepasse, fetchUnits } from '@/modules/abasus/api';
+import { previewRepasse, runRepasse, fetchUnits, fetchRepasseHistory } from '@/modules/abasus/api';
 import type { RepasseResponse, RepasseRun, MissingRule, SemVinculo, UnitOption } from '@/modules/abasus/types';
 
 function fmtCurrency(v: number | string) {
@@ -23,6 +23,8 @@ export default function RepassePage() {
   const [success, setSuccess] = useState('');
   const [data, setData] = useState<RepasseResponse | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [history, setHistory] = useState<any[]>([]);
+  const [historyExpanded, setHistoryExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchUnits().then(u => {
@@ -40,7 +42,14 @@ export default function RepassePage() {
     finally { setLoading(false); }
   };
 
+  const loadHistory = async () => {
+    if (!unitId) return;
+    try { setHistory(await fetchRepasseHistory(unitId)); }
+    catch { /* non-blocking */ }
+  };
+
   useEffect(() => { if (unitId && competence) loadPreview(); }, [unitId, competence]);
+  useEffect(() => { if (unitId) loadHistory(); }, [unitId]);
 
   const handleRun = async () => {
     if (!confirm(`Confirmar cálculo e geração de Payables para ${competence}?\n\nEsta ação é idempotente: se já existir, retorna o resultado anterior.`)) return;
@@ -50,6 +59,7 @@ export default function RepassePage() {
       setData(result);
       if (result.status === 'CREATED') {
         setSuccess(`Repasses gerados: ${result.payablesCreated} payable(s), total ${fmtCurrency(result.totalRepasse)}`);
+        await loadHistory();
       } else if (result.status === 'ALREADY_EXISTS') {
         setSuccess(result.message || 'Repasses já existem.');
       } else if (result.status === 'NO_DATA') {
@@ -244,6 +254,69 @@ export default function RepassePage() {
             </div>
           )}
         </>
+      )}
+
+      {/* ── HISTORY ── */}
+      {history.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700">Histórico de Repasses</h3>
+            <span className="text-xs text-gray-400">{history.length} competência(s) calculada(s)</span>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {history.map((group) => {
+              const isOpen = historyExpanded.has(group.competence);
+              return (
+                <div key={group.competence}>
+                  <button onClick={() => setHistoryExpanded(prev => {
+                    const s = new Set(prev); s.has(group.competence) ? s.delete(group.competence) : s.add(group.competence); return s;
+                  })} className="w-full px-5 py-3 flex items-center justify-between hover:bg-gray-50/50 transition text-left">
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm">{isOpen ? '▾' : '▸'}</span>
+                      <span className="font-mono font-semibold text-gray-800">{group.competence}</span>
+                      <span className="text-xs text-gray-400">{group.employee_count} funcionário(s)</span>
+                    </div>
+                    <span className="font-bold text-purple-800">{fmtCurrency(group.total)}</span>
+                  </button>
+                  {isOpen && (
+                    <div className="px-8 pb-3">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-gray-400 text-xs uppercase border-b border-gray-100">
+                            <th className="pb-2 font-medium">Funcionário</th>
+                            <th className="pb-2 font-medium">Role</th>
+                            <th className="pb-2 font-medium">Status Payable</th>
+                            <th className="pb-2 font-medium text-right">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                          {group.runs.map((r: any) => (
+                            <tr key={r.id}>
+                              <td className="py-2 font-medium text-gray-700">{r.employee_name}</td>
+                              <td className="py-2">
+                                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${r.role === 'DOCTOR' ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-700'}`}>
+                                  {r.role === 'DOCTOR' ? 'Médico' : 'Secretária'}
+                                </span>
+                              </td>
+                              <td className="py-2 text-xs">
+                                {r.payable ? (
+                                  <span className={`px-2 py-0.5 rounded-full font-medium ${r.payable.status === 'PAGO' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                    {r.payable.status}
+                                  </span>
+                                ) : <span className="text-gray-400">—</span>}
+                              </td>
+                              <td className="py-2 text-right font-semibold">{fmtCurrency(r.total_value)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
     </div>
   );

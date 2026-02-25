@@ -63,7 +63,7 @@ export class RepasseController {
   async preview(
     @Query('unit_id', ParseUUIDPipe) unitId: string,
     @Query('competence') competence: string,
-  ) {
+  ): Promise<any> {
     return this.service.preview(unitId, competence);
   }
 
@@ -76,8 +76,20 @@ export class RepasseController {
     @Query('unit_id', ParseUUIDPipe) unitId: string,
     @Body() dto: RunRepasseDto,
     @CurrentUser() user: AuthenticatedUser,
-  ) {
+  ): Promise<any> {
     return this.service.run(unitId, dto.competence, user.id);
+  }
+
+  // ══════════ HISTORY ══════════
+
+  @Get('history')
+  @RequirePermissions(Permission.ABASUS_READ)
+  @ApiOperation({ summary: 'Histórico de repasses calculados (agrupado por competência)' })
+  @ApiQuery({ name: 'unit_id', required: true })
+  async history(
+    @Query('unit_id', ParseUUIDPipe) unitId: string,
+  ): Promise<any> {
+    return this.service.listHistory(unitId);
   }
 
   // ══════════ CATALOG ══════════
