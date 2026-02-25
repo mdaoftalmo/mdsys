@@ -1,0 +1,1520 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ERP MDV Oftalmologia — MODELAGEM DEFINITIVA (schema.prisma)
+//
+//  Stack:  PostgreSQL 16 · Prisma 5 · NestJS
+//  Regras: snake_case tudo · UUID PKs · UTC timestamps · soft delete
+//
+//  ESCOPO (conforme solicitado):
+//    ✓ Financeiro (AP/AR, conciliação, contas bancárias, DRE/centros de custo)
+//    ✓ Compras/Estoque (itens, fornecedores, pedidos, entradas/saídas, FEFO)
+//    ✓ RH gerencial (colaboradores, contratos/custos, documentos/vencimentos)
+//    ✓ Orientação Cirúrgica (pipeline, scoring, followups, patologias)
+//    ✓ BI (fatos + dimensões mínimos)
+//    ✓ Core/MDM (unidades, pacientes, convênios, catálogo serviços, PDV)
+//    ✓ TISS/SUS (faturamento, BPA, glosas, repasses)
+//    ✓ Auditoria (activity_logs imutável)
+//    ✗ Agenda (excluído conforme requisito)
+//    ✗ Prontuário/PEP (excluído conforme requisito)
+//
+//  DECISÃO: BI como schema separado
+//    Prisma não suporta CREATE MATERIALIZED VIEW nativamente.
+//    As views DW ficam no schema "dw" via migration SQL raw.
+//    O script migrate-dw.sql cria as views; Prisma lê via @map + @@schema.
+//    Enquanto multiSchema não for GA, as views vivem em "public" com prefixo dw_.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// Convenção: UPPER_SNAKE no Prisma → gera CHECK constraint no PG
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Core ──
+
+enum AccessLevel {
+  FULL          // Todas unidades, todos módulos
+  FINANCEIRO    // Módulos financeiros + operacionais, multi-unit
+  SECRETARIA    // PDV, clientes, orientação, SUS quantitativo, estoque
+}
+
+enum TaxRegime {
+  SIMPLES_NACIONAL
+  LUCRO_PRESUMIDO
+  LUCRO_REAL
+}
+
+// ── Financeiro ──
+
+enum PayableStatus {
+  PENDENTE
+  APROVADO      // contabilizado como gasto
+  REPROVADO     // com justificativa obrigatória
+  AJUSTADO      // com asterisco (*) no relatório — requer credencial FULL/Diretoria
+  PAGO
+  CANCELADO
+}
+
+enum ApprovalAction {
+  APROVADO
+  REPROVADO
+  AJUSTADO
+}
+
+enum PaymentMethod {
+  DINHEIRO
+  PIX
+  CARTAO_DEBITO
+  CARTAO_CREDITO
+  BOLETO
+  TRANSFERENCIA
+  CONVENIO
+  CARTAO_CORP
+}
+
+enum SaleStatus {
+  DRAFT
+  CONFIRMED
+  CANCELED
+  PAID
+}
+
+enum ReceivableStatus {
+  PREVISTO
+  RECEBIDO
+  ATRASADO
+  GLOSADO
+}
+
+enum PixStatus {
+  PENDENTE
+  PAGO
+  EXPIRADO
+}
+
+enum AccountNature {
+  RECEITA       // código 3.x — créditos na DRE
+  DESPESA       // código 4.x — débitos na DRE
+  PATRIMONIO    // código 1.x/2.x — balanço (não entra na DRE)
+}
+
+enum DreSection {
+  RECEITA_BRUTA
+  DEDUCOES_RECEITA
+  CUSTO_SERVICO
+  DESPESA_PESSOAL
+  DESPESA_ADMINISTRATIVA
+  DESPESA_COMERCIAL
+  DESPESA_OCUPACAO
+  DESPESA_FINANCEIRA
+  RECEITA_FINANCEIRA
+  OUTRAS_RECEITAS
+  OUTRAS_DESPESAS
+  DEPRECIACAO_AMORTIZACAO
+  IMPOSTOS_RESULTADO
+  NAO_DRE
+}
+
+enum LedgerType {
+  DEBIT
+  CREDIT
+}
+
+enum CashDirection {
+  IN
+  OUT
+}
+
+enum EntryStatus {
+  POSTED
+  REVERSED
+}
+
+enum SourceType {
+  PAYABLE
+  RECEIVABLE
+  MANUAL
+  ABASUS_REVENUE // receita SUS (produção confirmada)
+  ABASUS_COST    // custo de insumos SUS (produção confirmada)
+}
+
+enum DreLineType {
+  HEADER        // título de seção (ex: "RECEITA BRUTA")
+  GROUP         // agrupador com fórmula sum (ex: "Consultas")
+  INPUT         // valor editável (ex: "Particular")
+  RESULT        // resultado calculado (ex: "EBITDA")
+}
+
+// ── Repasses ──
+
+enum RepasseStatus {
+  BLOQUEADO     // aguardando liquidação do receivable
+  LIBERADO      // receivable pago → pode liberar
+  GLOSADO       // receivable glosado → recalcula
+  PAGO
+}
+
+enum RepasseReceiptStatus {
+  PENDENTE
+  LIQUIDADO
+  GLOSA_PARCIAL
+}
+
+// ── TISS / Faturamento ──
+
+enum TissBatchStatus {
+  ABERTO
+  FECHADO
+  VALIDADO
+  ENVIADO
+  COM_GLOSA
+  PROCESSADO
+  PAGO
+}
+
+enum TissXmlStatus {
+  RASCUNHO
+  VALIDADO
+  ENVIADO
+  ACEITO
+  REJEITADO
+}
+
+enum GlosaType {
+  ADM           // administrativa (documentação)
+  TEC           // técnica (CID incompatível, etc.)
+}
+
+enum GlosaStatus {
+  PENDENTE
+  RECURSO_ENVIADO
+  ACEITO
+  MANTIDO
+}
+
+// ── BPA/SUS ──
+
+enum BpaType {
+  BPA_I
+  APAC
+}
+
+enum BpaStatus {
+  PENDENTE
+  TRANSMITIDO
+  PROCESSADO
+  REJEITADO
+}
+
+// ── Compras/Estoque ──
+
+enum PurchaseOrderStatus {
+  RASCUNHO
+  APROVADO
+  ENVIADO
+  PARCIAL       // recebido parcialmente
+  RECEBIDO
+  CANCELADO
+}
+
+enum StockMovementType {
+  ENTRADA       // compra, devolução, ajuste positivo
+  SAIDA         // consumo, procedimento, ajuste negativo
+  AJUSTE        // inventário
+  TRANSFERENCIA // entre filiais
+}
+
+// ── RH ──
+
+enum EmployeeType {
+  CLT
+  PJ
+  AUTONOMO
+}
+
+enum EmployeeStatus {
+  ATIVO
+  FERIAS
+  AFASTADO
+  DESLIGADO
+}
+
+enum DocumentStatus {
+  VIGENTE
+  VENCIDO
+  PENDENTE
+}
+
+// ── Orientação Cirúrgica ──
+
+enum SurgicalLeadStatus {
+  PRIMEIRA      // indicação recebida, 1º contato pendente
+  RETORNO       // agendou retorno
+  POS_OP        // em pós-operatório
+  PACIENTE      // decidiu operar, aguardando data
+  FECHOU        // cirurgia confirmada/realizada
+  PROPENSO      // alta probabilidade, em conversão
+  INDECISO      // barreiras identificadas, em trabalho
+  PERDIDO       // desistiu definitivamente
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CORE / MDM
+//  Entidades raiz: Units, Patients, Suppliers, Convenios, SystemUsers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Filiais. Raiz do Data Ownership — toda tabela transacional referencia unit_id.
+model Unit {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String    @db.VarChar(120)           // "São Camilo", "Santa Casa"
+  cnpj       String    @unique @db.Char(18)       // 00.000.000/0000-00
+  city       String    @db.VarChar(100)
+  address    String?   @db.VarChar(255)
+  phone      String?   @db.VarChar(20)
+  cnes       String?   @db.Char(7)                // Cadastro Nacional Estab. Saúde
+  tax_regime TaxRegime @default(LUCRO_PRESUMIDO)
+  is_active  Boolean   @default(true)
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+  deleted_at DateTime? @db.Timestamptz
+
+  // ── Relations 1:N ──
+  patients             Patient[]
+  system_users         SystemUser[]
+  employees            Employee[]
+  team_members         TeamMember[]
+  bank_accounts        BankAccount[]
+  payables             Payable[]
+  receivables          Receivable[]
+  pix_transactions     PixTransaction[]
+  sales                Sale[]
+  surgical_leads       SurgicalLead[]
+  stock_levels         StockLevel[]
+  stock_movements      StockMovement[]
+  purchase_orders      PurchaseOrder[]
+  tiss_batches         TissBatch[]
+  bpa_records          BpaRecord[]
+  budget_ceilings      BudgetCeiling[]
+  sus_consultations    SusConsultation[]
+  sus_exams            SusExam[]
+  sus_surgeries        SusSurgery[]
+  repasse_transactions RepasseTransaction[]
+  dre_values           DreValue[]
+  tax_calculations     TaxCalculation[]
+  dmed_records         DmedRecord[]
+  activity_logs        ActivityLog[]
+  unit_accounts        UnitAccount[]
+  ledger_entries       LedgerEntry[]
+  cash_movements       CashMovement[]
+  sus_repasse_rules    SusRepasseRule[]
+  sus_repasse_runs     SusRepasseRun[]
+
+  @@map("units")
+}
+
+/// Pacientes — MDM. CPF unique cross-filial. origin_unit_id = onde cadastrou primeiro.
+model Patient {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String    @db.VarChar(200)
+  cpf             String    @unique @db.Char(14)  // 000.000.000-00
+  rg              String?   @db.VarChar(20)
+  dob             DateTime  @db.Date
+  phone           String?   @db.VarChar(20)
+  email           String?   @db.VarChar(200)
+  address         String?   @db.VarChar(300)
+  source_channel  String?   @db.VarChar(100)  // "como conheceu a clínica": indicação, google, instagram, etc.
+  prontuario_code String?   @unique @db.VarChar(20)
+  notes           String?   @db.Text
+  origin_unit_id  String    @db.Uuid
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+  deleted_at DateTime? @db.Timestamptz
+
+  unit           Unit           @relation(fields: [origin_unit_id], references: [id])
+  sales          Sale[]
+  surgical_leads SurgicalLead[]
+
+  @@index([origin_unit_id], name: "idx_patients_unit")
+  @@index([name], name: "idx_patients_name")
+  @@map("patients")
+}
+
+/// Fornecedores — global (sem unit_id). Vinculado a payables e compras.
+model Supplier {
+  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String  @db.VarChar(200)
+  cnpj          String  @unique @db.Char(18)
+  category      String  @db.VarChar(100)         // "Insumos Médicos", "Limpeza"
+  is_simples    Boolean @default(false)           // afeta retenções na fonte
+  bank_code     String? @db.VarChar(10)
+  bank_agency   String? @db.VarChar(10)
+  bank_account  String? @db.VarChar(20)
+  contact_name  String? @db.VarChar(100)
+  contact_phone String? @db.VarChar(20)
+  contact_email String? @db.VarChar(200)
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+  deleted_at DateTime? @db.Timestamptz
+
+  payables        Payable[]
+  purchase_orders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+/// Operadoras de saúde / convênios
+model Convenio {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String   @db.VarChar(200)     // "PAS São Camilo", "Sul América"
+  slug               String   @unique @db.VarChar(50)  // "pas_sao_camilo" — join com preço
+  registro_ans       String?  @unique @db.VarChar(20)
+  coparticipacao_pct Decimal? @db.Decimal(5, 2)
+  color              String?  @db.Char(7)           // "#f59e0b" para UI
+  is_active          Boolean  @default(true)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  sales                  Sale[]
+  tiss_batches           TissBatch[]
+  service_convenio_prices ServiceConvenioPrice[]
+
+  @@map("convenios")
+}
+
+/// Usuários do sistema — login + RBAC
+model SystemUser {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String      @db.VarChar(120)
+  login         String      @unique @db.VarChar(50)
+  password_hash String      @db.VarChar(255)
+  access_level  AccessLevel @default(SECRETARIA)
+  unit_id       String?     @db.Uuid             // null = todas as filiais
+  is_active     Boolean     @default(true)
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+  deleted_at DateTime? @db.Timestamptz
+
+  unit          Unit?         @relation(fields: [unit_id], references: [id])
+  approval_logs ApprovalLog[]
+  activity_logs ActivityLog[]
+  ledger_posted LedgerEntry[] @relation("LedgerPostedBy")
+  cash_recorded CashMovement[] @relation("CashRecordedBy")
+
+  @@index([unit_id], name: "idx_system_users_unit")
+  @@map("system_users")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  FINANCEIRO — AP / AR / Conciliação / Plano de Contas / DRE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Plano de Contas. Código hierárquico: "3.1" = Receita Particular
+/// Plano de Contas MESTRE do grupo.
+/// Sem unit_id — é global. Hierárquico: parent → children.
+/// is_locked = true → só admin grupo altera.
+/// DRE calculada por dre_section + nature.
+model MasterAccount {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code        String        @unique @db.VarChar(20)     // "3.1.01.001"
+  name        String        @db.VarChar(200)
+  nature      AccountNature
+  dre_section DreSection    @default(NAO_DRE)
+  parent_id   String?       @db.Uuid
+  level       Int           @default(1)                 // 1–5
+  is_group    Boolean       @default(false)
+  is_active   Boolean       @default(true)
+  is_locked   Boolean       @default(true)
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+
+  parent        MasterAccount?  @relation("AccountHierarchy", fields: [parent_id], references: [id])
+  children      MasterAccount[] @relation("AccountHierarchy")
+  unit_accounts UnitAccount[]
+
+  @@index([parent_id], name: "idx_master_accounts_parent")
+  @@index([dre_section], name: "idx_master_accounts_dre")
+  @@index([nature], name: "idx_master_accounts_nature")
+  @@map("master_accounts")
+}
+
+/// Plano por unidade. Sempre referencia MasterAccount.
+/// Unique(unit_id, master_account_id) — 1:1 por unidade.
+model UnitAccount {
+  id                String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id           String  @db.Uuid
+  master_account_id String  @db.Uuid
+  custom_name       String? @db.VarChar(200)
+  is_active         Boolean @default(true)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit           Unit           @relation(fields: [unit_id], references: [id])
+  master_account MasterAccount  @relation(fields: [master_account_id], references: [id])
+  payables       Payable[]
+  receivables    Receivable[]
+  ledger_entries LedgerEntry[]
+  cash_movements CashMovement[]
+
+  @@unique([unit_id, master_account_id], name: "uq_unit_master_account")
+  @@index([unit_id], name: "idx_unit_accounts_unit")
+  @@index([master_account_id], name: "idx_unit_accounts_master")
+  @@map("unit_accounts")
+}
+
+/// Lançamento contábil por COMPETÊNCIA (camada DRE).
+/// Gerado ao aprovar AP ou lançar AR. APPEND-ONLY.
+/// Unique(source_type, source_id) — idempotência.
+model LedgerEntry {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id         String      @db.Uuid
+  unit_account_id String      @db.Uuid
+  competence      String      @db.VarChar(7)             // "2026-01"
+  entry_date      DateTime    @db.Date
+  amount          Decimal     @db.Decimal(15, 2)         // sempre positivo
+  type            LedgerType                             // DEBIT / CREDIT
+  status          EntryStatus @default(POSTED)
+  source_type     SourceType                             // PAYABLE / RECEIVABLE / MANUAL
+  source_id       String      @db.Uuid
+  description     String?     @db.VarChar(300)
+  posted_by       String      @db.Uuid
+  reversed_by_id  String?     @unique @db.Uuid
+  reversal_reason String?     @db.VarChar(300)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  unit         Unit         @relation(fields: [unit_id], references: [id])
+  unit_account UnitAccount  @relation(fields: [unit_account_id], references: [id])
+  posted_user  SystemUser   @relation("LedgerPostedBy", fields: [posted_by], references: [id])
+  reversed_by  LedgerEntry? @relation("LedgerReversal", fields: [reversed_by_id], references: [id])
+  reversal_of  LedgerEntry? @relation("LedgerReversal")
+
+  @@unique([source_type, source_id], name: "uq_ledger_source")
+  @@index([unit_id, competence], name: "idx_ledger_unit_comp")
+  @@index([unit_account_id], name: "idx_ledger_account")
+  @@index([competence, status], name: "idx_ledger_comp_status")
+  @@map("ledger_entries")
+}
+
+/// Movimento de CAIXA. Gerado ao pagar AP ou receber AR.
+/// Unique(source_type, source_id) — idempotência.
+model CashMovement {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id         String        @db.Uuid
+  unit_account_id String        @db.Uuid
+  bank_account_id String?       @db.Uuid
+  movement_date   DateTime      @db.Date
+  amount          Decimal       @db.Decimal(15, 2)       // sempre positivo
+  direction       CashDirection                          // IN / OUT
+  payment_method  PaymentMethod
+  source_type     SourceType
+  source_id       String        @db.Uuid
+  description     String?       @db.VarChar(300)
+  recorded_by     String        @db.Uuid
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  unit          Unit          @relation(fields: [unit_id], references: [id])
+  unit_account  UnitAccount   @relation(fields: [unit_account_id], references: [id])
+  bank_account  BankAccount?  @relation(fields: [bank_account_id], references: [id])
+  recorded_user SystemUser    @relation("CashRecordedBy", fields: [recorded_by], references: [id])
+
+  @@unique([source_type, source_id], name: "uq_cash_source")
+  @@index([unit_id, movement_date], name: "idx_cash_unit_date")
+  @@index([unit_account_id], name: "idx_cash_account")
+  @@index([bank_account_id], name: "idx_cash_bank")
+  @@map("cash_movements")
+}
+
+/// Centros de Custo. full_path hierárquico: "Receita > Consultas > Particular"
+/// Decisão: path materializado (não adjacência list) porque DRE usa o path inteiro.
+model CostCenter {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String  @db.VarChar(200)
+  full_path String  @unique @db.VarChar(500)
+  parent_id String? @db.Uuid
+  is_active Boolean @default(true)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  parent   CostCenter?  @relation("CostCenterHierarchy", fields: [parent_id], references: [id])
+  children CostCenter[] @relation("CostCenterHierarchy")
+  payables Payable[]
+
+  @@map("cost_centers")
+}
+
+/// Contas bancárias da empresa — base para conciliação OFX/CNAB
+model BankAccount {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id        String  @db.Uuid
+  bank_name      String  @db.VarChar(100)
+  bank_code      String  @db.VarChar(10)
+  agency         String  @db.VarChar(10)
+  account_number String  @db.VarChar(20)
+  account_type   String  @db.VarChar(20)        // "corrente", "poupanca"
+  is_main        Boolean @default(false)
+  is_active      Boolean @default(true)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit         Unit              @relation(fields: [unit_id], references: [id])
+  transactions BankTransaction[]
+  cash_movements CashMovement[]
+
+  @@index([unit_id], name: "idx_bank_accounts_unit")
+  @@map("bank_accounts")
+}
+
+/// Lançamentos do extrato bancário (importado via OFX/CNAB).
+/// Conciliação = vincular a payable OU receivable.
+model BankTransaction {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bank_account_id String   @db.Uuid
+  date            DateTime @db.Date
+  description     String   @db.VarChar(300)
+  amount          Decimal  @db.Decimal(15, 2)  // + crédito, - débito
+  balance         Decimal? @db.Decimal(15, 2)
+  reference       String?  @db.VarChar(100)    // hash/id da transação no banco
+  payable_id      String?  @db.Uuid
+  receivable_id   String?  @db.Uuid
+  is_reconciled   Boolean  @default(false)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  bank_account BankAccount @relation(fields: [bank_account_id], references: [id])
+  payable      Payable?    @relation(fields: [payable_id], references: [id])
+  receivable   Receivable? @relation(fields: [receivable_id], references: [id])
+
+  @@index([bank_account_id, date], name: "idx_bank_tx_acct_date")
+  @@index([is_reconciled], name: "idx_bank_tx_reconciled")
+  @@map("bank_transactions")
+}
+
+/// Contas a Pagar — centro do módulo financeiro
+model Payable {
+  id                       String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id                  String        @db.Uuid
+  supplier_id              String        @db.Uuid
+  unit_account_id          String?       @db.Uuid
+  cost_center_id           String?       @db.Uuid
+  description              String        @db.VarChar(300)
+  competence               String        @db.VarChar(7)     // "01/2026" ou "2026-01"
+  due_date                 DateTime      @db.Date
+  value                    Decimal       @db.Decimal(15, 2)
+  original_value           Decimal?      @db.Decimal(15, 2) // preservado quando AJUSTADO
+  status                   PayableStatus @default(PENDENTE)
+  payment_method           PaymentMethod @default(BOLETO)
+  has_attachment            Boolean       @default(false)
+  installments             Int           @default(1)
+  is_recurring             Boolean       @default(false)
+  rejection_justification  String?       @db.Text            // obrigatório quando REPROVADO
+  adjustment_justification String?       @db.Text            // obrigatório quando AJUSTADO
+  authorized_by            String?       @db.VarChar(120)    // quem autorizou o AJUSTE
+  paid_at                  DateTime?     @db.Timestamptz
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+  deleted_at DateTime? @db.Timestamptz
+
+  unit          Unit              @relation(fields: [unit_id], references: [id])
+  supplier      Supplier          @relation(fields: [supplier_id], references: [id])
+  unit_account  UnitAccount?      @relation(fields: [unit_account_id], references: [id])
+  cost_center   CostCenter?       @relation(fields: [cost_center_id], references: [id])
+  approval_logs ApprovalLog[]
+  bank_transactions BankTransaction[]
+  sus_repasse_runs  SusRepasseRun[]
+
+  @@index([unit_id, status], name: "idx_payables_unit_status")
+  @@index([unit_id, due_date], name: "idx_payables_unit_due")
+  @@index([supplier_id], name: "idx_payables_supplier")
+  @@index([cost_center_id], name: "idx_payables_cost_center")
+  @@index([unit_account_id], name: "idx_payables_account")
+  @@map("payables")
+}
+
+/// Log de aprovações — APPEND-ONLY (sem UPDATE, sem DELETE, sem deleted_at)
+/// Cada ação (aprovar/reprovar/ajustar) gera exatamente 1 registro imutável.
+model ApprovalLog {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  payable_id     String         @db.Uuid
+  action         ApprovalAction
+  user_id        String         @db.Uuid
+  value          Decimal        @db.Decimal(15, 2)
+  original_value Decimal?       @db.Decimal(15, 2)  // se AJUSTADO: valor anterior
+  justification  String?        @db.Text
+  authorized_by  String?        @db.VarChar(120)     // se AJUSTADO: nome do autorizador
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  // Sem updated_at — imutável por design
+
+  payable Payable    @relation(fields: [payable_id], references: [id])
+  user    SystemUser @relation(fields: [user_id], references: [id])
+
+  @@index([payable_id], name: "idx_approval_logs_payable")
+  @@index([created_at], name: "idx_approval_logs_date")           // relatório cronológico
+  @@map("approval_logs")
+}
+
+/// Contas a Receber
+model Receivable {
+  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id       String           @db.Uuid
+  source        String           @db.VarChar(100)    // "Particular", "Unimed", etc.
+  competence    String           @db.VarChar(7)
+  expected_date DateTime         @db.Date
+  gross_value   Decimal          @db.Decimal(15, 2)
+  discount      Decimal          @default(0) @db.Decimal(15, 2)
+  net_value     Decimal          @db.Decimal(15, 2)
+  gloss_value   Decimal          @default(0) @db.Decimal(15, 2)
+  status        ReceivableStatus @default(PREVISTO)
+  is_convenio   Boolean          @default(false)
+  unit_account_id String?        @db.Uuid
+  received_at   DateTime?        @db.Timestamptz
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+  deleted_at DateTime? @db.Timestamptz
+
+  unit               Unit                @relation(fields: [unit_id], references: [id])
+  unit_account       UnitAccount?        @relation(fields: [unit_account_id], references: [id])
+  sale               Sale?
+  glosas             Glosa[]
+  repasse_txns       RepasseTransaction[]
+  bank_transactions  BankTransaction[]
+
+  @@index([unit_id, status], name: "idx_receivables_unit_status")
+  @@index([unit_id, expected_date], name: "idx_receivables_unit_expdate")
+  @@index([unit_account_id], name: "idx_receivables_account")
+  @@map("receivables")
+}
+
+/// PIX dinâmico — cobranças instantâneas
+model PixTransaction {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id       String    @db.Uuid
+  txid          String    @unique @db.VarChar(100)
+  value         Decimal   @db.Decimal(15, 2)
+  patient_name  String    @db.VarChar(200)
+  cpf           String?   @db.Char(14)
+  description   String    @db.VarChar(300)
+  status        PixStatus @default(PENDENTE)
+  paid_at       DateTime? @db.Timestamptz
+  is_reconciled Boolean   @default(false)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@index([unit_id, status], name: "idx_pix_tx_unit_status")
+  @@map("pix_transactions")
+}
+
+/// DRE — valores editáveis por linha × mês × unidade
+/// DRE_STRUCTURE (67 linhas: header/group/input/result) é constante em código, não no banco.
+/// Aqui persistimos apenas os VALORES manuais e overrides.
+model DreValue {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id   String  @db.Uuid
+  line_id   String  @db.VarChar(50)    // ref constante: "consultas_part", "aluguel", "ebitda"
+  month_key String  @db.VarChar(7)     // "2026-01"
+  value     Decimal @db.Decimal(15, 2)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@unique([unit_id, line_id, month_key], name: "uq_dre_value")
+  @@map("dre_values")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  REPASSES MÉDICOS
+//  Regime de caixa: repasse libera SOMENTE quando receivable é liquidado.
+//  BullMQ CRON a cada 1h verifica receivables e muda status.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Regras de rateio: "Dr. Eduardo recebe 60% de cirurgia particular"
+model RepasseRule {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  doctor_name    String  @db.VarChar(200)
+  procedure_type String  @db.VarChar(100)        // "cirurgia_particular", "consulta_convenio"
+  percentual     Decimal @db.Decimal(5, 2)       // 0.00 a 100.00
+  fixed_value    Decimal @default(0) @db.Decimal(15, 2)
+  description    String? @db.VarChar(300)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  transactions RepasseTransaction[]
+
+  @@map("repasse_rules")
+}
+
+/// Cada procedimento gera 1 transação de repasse
+model RepasseTransaction {
+  id               String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id          String               @db.Uuid
+  repasse_rule_id  String               @db.Uuid
+  receivable_id    String?              @db.Uuid     // vincula ao recebimento que dispara liberação
+  patient_name     String               @db.VarChar(200)
+  procedure_type   String               @db.VarChar(100)
+  attendance_id    String?              @db.VarChar(30)  // "CIR-2026-018"
+  gross_value      Decimal              @db.Decimal(15, 2)
+  net_value        Decimal              @db.Decimal(15, 2)
+  percentual       Decimal              @db.Decimal(5, 2)
+  repasse_value    Decimal              @db.Decimal(15, 2)
+  status           RepasseStatus        @default(BLOQUEADO)
+  receipt_status   RepasseReceiptStatus @default(PENDENTE)
+  procedure_date   DateTime             @db.Date
+  released_at      DateTime?            @db.Timestamptz
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit       Unit        @relation(fields: [unit_id], references: [id])
+  rule       RepasseRule @relation(fields: [repasse_rule_id], references: [id])
+  receivable Receivable? @relation(fields: [receivable_id], references: [id])
+
+  @@index([unit_id, status], name: "idx_repasse_tx_unit_status")
+  @@index([receipt_status], name: "idx_repasse_tx_receipt")        // CRON busca PENDENTE
+  @@map("repasse_transactions")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TISS / FATURAMENTO CONVÊNIOS
+//  Lotes → Guias → Glosas. Motor anti-glosa R01-R10 roda antes do XML.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model TissBatch {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id      String          @db.Uuid
+  convenio_id  String?         @db.Uuid
+  operadora    String          @db.VarChar(200)
+  registro_ans String          @db.VarChar(20)
+  lote         String          @db.VarChar(30)
+  competence   String          @db.VarChar(7)
+  status       TissBatchStatus @default(ABERTO)
+  xml_status   TissXmlStatus   @default(RASCUNHO)
+  total_guides Int             @default(0)
+  total_value  Decimal         @default(0) @db.Decimal(15, 2)
+  sent_at      DateTime?       @db.Timestamptz
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit     Unit      @relation(fields: [unit_id], references: [id])
+  convenio Convenio? @relation(fields: [convenio_id], references: [id])
+  guides   TissGuide[]
+
+  @@index([unit_id, competence], name: "idx_tiss_batches_unit_comp")
+  @@index([status], name: "idx_tiss_batches_status")
+  @@map("tiss_batches")
+}
+
+model TissGuide {
+  id                  String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batch_id            String  @db.Uuid
+  beneficiary_name    String  @db.VarChar(200)
+  cpf                 String  @db.Char(14)
+  procedure_code      String  @db.VarChar(20)    // código TUSS
+  tuss_description    String  @db.VarChar(300)
+  value               Decimal @db.Decimal(15, 2)
+  authorization_token String? @db.VarChar(50)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  batch  TissBatch @relation(fields: [batch_id], references: [id], onDelete: Cascade)
+  glosas Glosa[]
+
+  @@index([batch_id], name: "idx_tiss_guides_batch")
+  @@map("tiss_guides")
+}
+
+/// Glosas — podem originar de guide (TISS) ou receivable (genérica)
+model Glosa {
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tiss_guide_id  String?     @db.Uuid
+  receivable_id  String?     @db.Uuid
+  type           GlosaType
+  reason         String      @db.VarChar(500)
+  original_value Decimal     @db.Decimal(15, 2)
+  glosa_value    Decimal     @db.Decimal(15, 2)
+  status         GlosaStatus @default(PENDENTE)
+  recurso_xml    String?     @db.Text
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  tiss_guide TissGuide?  @relation(fields: [tiss_guide_id], references: [id])
+  receivable Receivable? @relation(fields: [receivable_id], references: [id])
+
+  @@index([status], name: "idx_glosas_status")
+  @@index([tiss_guide_id], name: "idx_glosas_guide")
+  @@map("glosas")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BPA / APAC — SIA/SUS + Tetos Orçamentários
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model BpaRecord {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id           String    @db.Uuid
+  type              BpaType
+  competence        String    @db.VarChar(7)
+  cnes              String    @db.VarChar(10)
+  cbo               String    @db.VarChar(10)
+  professional_name String    @db.VarChar(200)
+  cid10             String    @db.VarChar(10)
+  procedure_code    String    @db.VarChar(20)    // SIGTAP
+  quantity          Int
+  unit_value        Decimal?  @db.Decimal(15, 2)
+  apac_number       String?   @db.VarChar(20)
+  status            BpaStatus @default(PENDENTE)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@index([unit_id, competence], name: "idx_bpa_unit_comp")
+  @@map("bpa_records")
+}
+
+model BudgetCeiling {
+  id              String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id         String  @db.Uuid
+  procedure_group String  @db.VarChar(200)
+  monthly_ceiling Decimal @db.Decimal(15, 2)
+  competence      String  @db.VarChar(7)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@unique([unit_id, procedure_group, competence], name: "uq_budget_ceiling")
+  @@map("budget_ceilings")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PDV / VENDAS + Catálogo de Serviços
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Catálogo master de serviços (consultas, exames, cirurgias)
+model ServiceCatalog {
+  id               String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String  @db.VarChar(200)      // "Consulta em Consultório", "OCT"
+  category         String  @db.VarChar(100)      // "Consulta", "Exame", "Cirurgia"
+  price_particular Decimal @db.Decimal(15, 2)    // preço balcão
+  price_card       Decimal? @db.Decimal(15, 2)   // preço cartão (menor que particular)
+  tuss_code        String? @db.VarChar(20)
+  is_active        Boolean @default(true)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  convenio_prices ServiceConvenioPrice[]
+  sale_items      SaleItem[]
+
+  @@map("service_catalog")
+}
+
+/// Preço por convênio (N:N entre ServiceCatalog e Convenio via slug)
+model ServiceConvenioPrice {
+  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  service_id    String  @db.Uuid
+  convenio_id   String  @db.Uuid
+  price         Decimal @db.Decimal(15, 2)
+
+  service  ServiceCatalog @relation(fields: [service_id], references: [id], onDelete: Cascade)
+  convenio Convenio       @relation(fields: [convenio_id], references: [id])
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  @@unique([service_id, convenio_id], name: "uq_service_convenio_price")
+  @@map("service_convenio_prices")
+}
+
+/// Venda / atendimento no PDV
+model Sale {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id           String        @db.Uuid
+  patient_id        String?       @db.Uuid
+  convenio_id       String?       @db.Uuid
+  payment_method    PaymentMethod
+  status            SaleStatus    @default(DRAFT)
+  visit_type        String        @db.VarChar(50) // "primeira", "retorno", "pos_op"
+  subtotal          Decimal       @db.Decimal(15, 2)
+  discount          Decimal       @default(0) @db.Decimal(15, 2)
+  total             Decimal       @db.Decimal(15, 2)
+  is_coparticipacao Boolean       @default(false)
+  receivable_id     String?       @unique @db.Uuid
+  notes             String?       @db.Text
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit       Unit         @relation(fields: [unit_id], references: [id])
+  patient    Patient?     @relation(fields: [patient_id], references: [id])
+  convenio   Convenio?    @relation(fields: [convenio_id], references: [id])
+  receivable Receivable?  @relation(fields: [receivable_id], references: [id])
+  items      SaleItem[]
+
+  @@index([unit_id, created_at], name: "idx_sales_unit_date")
+  @@index([status], name: "idx_sales_status")
+  @@map("sales")
+}
+
+model SaleItem {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sale_id     String  @db.Uuid
+  service_id  String? @db.Uuid
+  description String  @db.VarChar(300)
+  quantity    Int     @default(1)
+  unit_price  Decimal @db.Decimal(15, 2)
+  discount    Decimal @default(0) @db.Decimal(15, 2)
+  subtotal    Decimal @db.Decimal(15, 2)
+
+  sale    Sale            @relation(fields: [sale_id], references: [id], onDelete: Cascade)
+  service ServiceCatalog? @relation(fields: [service_id], references: [id])
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  @@map("sale_items")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ORIENTAÇÃO CIRÚRGICA (CRM)
+//  Pipeline completo: leads, scoring IA, contatos, barreiras, followup
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Lead cirúrgico — cada candidato a cirurgia
+model SurgicalLead {
+  id                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id            String              @db.Uuid
+  patient_id         String?             @db.Uuid
+  name               String              @db.VarChar(200)
+  phone              String              @db.VarChar(20)
+  email              String?             @db.VarChar(200)
+  cpf                String?             @db.Char(14)
+  pathology          String              @db.VarChar(100) // "Catarata – Lente Clareon"
+  procedure          String?             @db.VarChar(200)
+  eye                String?             @db.VarChar(10)  // "OD", "OE", "AO"
+  status             SurgicalLeadStatus  @default(PRIMEIRA)
+  score              Int                 @default(0)      // 0-100 (scoring)
+  score_factors_json Json?               @db.JsonB        // breakdown: {interest, insurance, timeframe, barriers, had_return, contact_time}
+  interest           String?             @db.VarChar(20)  // "alto", "medio", "baixo"
+  barriers           String[]            @db.VarChar(100) // ["Preço", "Medo", "Agenda"]
+  has_insurance      Boolean             @default(false)
+  insurance_name     String?             @db.VarChar(100)
+  had_return         Boolean             @default(false)
+  desired_timeframe  String?             @db.VarChar(20)  // "0-30", "30-60", "60+"
+  lost_reason        String?             @db.VarChar(200)
+  notes              String?             @db.Text
+  responsavel        String?             @db.VarChar(120)
+  indication_date    DateTime?           @db.Date
+  last_contact_at    DateTime?           @db.Timestamptz
+  next_followup      DateTime?           @db.Date
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+  deleted_at DateTime? @db.Timestamptz
+
+  unit     Unit     @relation(fields: [unit_id], references: [id])
+  patient  Patient? @relation(fields: [patient_id], references: [id])
+  contacts LeadContact[]
+
+  @@index([unit_id, status], name: "idx_leads_unit_status")        // funil por filial
+  @@index([pathology], name: "idx_leads_pathology")                // filtro patologia
+  @@index([next_followup], name: "idx_leads_next_followup")        // CRON de ligações
+  @@map("surgical_leads")
+}
+
+/// Cada contato/followup com o lead (telefone, WhatsApp, presencial)
+model LeadContact {
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  lead_id                String    @db.Uuid
+  date                   DateTime  @db.Timestamptz
+  contacted_by           String    @db.VarChar(120)
+  channel                String    @db.VarChar(30)     // "Telefone", "WhatsApp", "Presencial"
+  result                 String?   @db.VarChar(300)
+  notes                  String?   @db.Text
+  scheduled_surgery_date DateTime? @db.Date
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  lead SurgicalLead @relation(fields: [lead_id], references: [id], onDelete: Cascade)
+
+  @@index([lead_id], name: "idx_lead_contacts_lead")
+  @@map("lead_contacts")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  COMPRAS / ESTOQUE (FEFO)
+//  Catálogo master → níveis por filial (lote+validade) → movimentações
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Catálogo master de itens (global, sem unit_id)
+model StockItem {
+  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sku           String  @unique @db.VarChar(30)
+  name          String  @db.VarChar(200)
+  category      String  @db.VarChar(100)         // "Injetável", "Descartável", "LIO"
+  unit_measure  String  @db.VarChar(30)          // "ampola", "frasco", "caixa"
+  cost          Decimal @db.Decimal(15, 2)
+  min_stock     Int                               // estoque mínimo absoluto
+  reorder_point Int                               // ponto de reposição (> min_stock)
+  requires_lot  Boolean @default(false)
+  requires_cold Boolean @default(false)           // termolábil → controle temp
+  is_active     Boolean @default(true)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  stock_levels         StockLevel[]
+  stock_movements      StockMovement[]
+  purchase_order_items PurchaseOrderItem[]
+  sus_consumptions     SusConsumption[]
+
+  @@map("stock_items")
+}
+
+/// Nível de estoque por filial + lote (FEFO — First Expire First Out)
+/// Cada combinação (item × unit × lote) é uma linha.
+model StockLevel {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stock_item_id String    @db.Uuid
+  unit_id       String    @db.Uuid
+  quantity      Int
+  lot           String?   @db.VarChar(30)
+  expiry        DateTime? @db.Date
+  unit_cost     Decimal   @db.Decimal(15, 2)
+  location      String?   @db.VarChar(50)        // "Sala Cirúrgica A", "Geladeira 2"
+  temp_control  Boolean   @default(false)
+  temp_min      Decimal?  @db.Decimal(5, 1)
+  temp_max      Decimal?  @db.Decimal(5, 1)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  item StockItem @relation(fields: [stock_item_id], references: [id])
+  unit Unit      @relation(fields: [unit_id], references: [id])
+
+  @@index([stock_item_id, unit_id, expiry], name: "idx_stock_levels_fefo")  // FEFO query
+  @@index([unit_id], name: "idx_stock_levels_unit")
+  @@map("stock_levels")
+}
+
+/// Movimentações — log APPEND-ONLY (sem UPDATE/DELETE)
+model StockMovement {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stock_item_id String            @db.Uuid
+  unit_id       String            @db.Uuid
+  type          StockMovementType
+  quantity      Int                              // + entrada, - saída
+  lot           String?           @db.VarChar(30)
+  patient_name  String?           @db.VarChar(200)
+  patient_cpf   String?           @db.Char(14)
+  procedure_id  String?           @db.VarChar(20)
+  reference     String?           @db.VarChar(200) // "PO-xxx", "Inventário 02/2026"
+  operator_name String            @db.VarChar(120)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  // Sem updated_at — imutável
+
+  item StockItem @relation(fields: [stock_item_id], references: [id])
+  unit Unit      @relation(fields: [unit_id], references: [id])
+
+  @@index([stock_item_id, unit_id, created_at], name: "idx_stock_mov_item_unit_date")
+  @@index([unit_id, type, created_at], name: "idx_stock_mov_unit_type_date")
+  @@map("stock_movements")
+}
+
+/// Pedidos de compra
+model PurchaseOrder {
+  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id           String              @db.Uuid
+  supplier_id       String              @db.Uuid
+  status            PurchaseOrderStatus @default(RASCUNHO)
+  total             Decimal             @db.Decimal(15, 2)
+  notes             String?             @db.Text
+  expected_delivery DateTime?           @db.Date
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit     Unit                @relation(fields: [unit_id], references: [id])
+  supplier Supplier            @relation(fields: [supplier_id], references: [id])
+  items    PurchaseOrderItem[]
+
+  @@index([unit_id, status], name: "idx_po_unit_status")
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  order_id      String  @db.Uuid
+  stock_item_id String  @db.Uuid
+  quantity      Int
+  unit_cost     Decimal @db.Decimal(15, 2)
+  subtotal      Decimal @db.Decimal(15, 2)
+
+  order PurchaseOrder @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  item  StockItem     @relation(fields: [stock_item_id], references: [id])
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  @@map("purchase_order_items")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  RH GERENCIAL
+//  Colaboradores, contratos/custos, documentos com vencimento
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Colaborador (CLT, PJ, Autônomo)
+model Employee {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id        String         @db.Uuid
+  name           String         @db.VarChar(200)
+  cpf            String         @unique @db.Char(14)
+  role           String         @db.VarChar(100)     // "Médico Oftalmologista", "Recepcionista"
+  department     String         @db.VarChar(100)
+  type           EmployeeType
+  status         EmployeeStatus @default(ATIVO)
+  salary         Decimal        @db.Decimal(15, 2)
+  admission_date DateTime       @db.Date
+  dismissal_date DateTime?      @db.Date
+  // Campos PJ
+  cnpj           String?        @db.Char(18)
+  company_name   String?        @db.VarChar(200)
+  company_address String?       @db.VarChar(300)
+  pj_tax_regime  TaxRegime?
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+  deleted_at DateTime? @db.Timestamptz
+
+  unit      Unit               @relation(fields: [unit_id], references: [id])
+  contracts EmployeeContract[]
+  documents EmployeeDocument[]
+  sus_repasse_runs SusRepasseRun[]
+
+  @@index([unit_id, status], name: "idx_employees_unit_status")
+  @@map("employees")
+}
+
+/// Contratos / custos periódicos do colaborador
+model EmployeeContract {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employee_id  String    @db.Uuid
+  type         String    @db.VarChar(100)        // "CLT", "Prestação PJ", "Autônomo"
+  start_date   DateTime  @db.Date
+  end_date     DateTime? @db.Date
+  monthly_cost Decimal   @db.Decimal(15, 2)
+  notes        String?   @db.Text
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  employee Employee @relation(fields: [employee_id], references: [id])
+
+  @@map("employee_contracts")
+}
+
+/// Documentos com data de vencimento (CRM, ASO, NR32, etc.)
+model EmployeeDocument {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employee_id String         @db.Uuid
+  type        String         @db.VarChar(100)    // "CRM", "COREN", "ASO", "NR32"
+  number      String?        @db.VarChar(50)
+  issued_at   DateTime?      @db.Date
+  expires_at  DateTime?      @db.Date
+  status      DocumentStatus @default(VIGENTE)
+  file_path   String?        @db.VarChar(500)    // S3 path
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  employee Employee @relation(fields: [employee_id], references: [id])
+
+  @@index([expires_at, status], name: "idx_emp_docs_expiry")         // alertas vencimento
+  @@map("employee_documents")
+}
+
+/// Equipe médica — detalhe extra: subgrupos, registro classe, login separado
+model TeamMember {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id         String       @db.Uuid
+  name            String       @db.VarChar(200)
+  cpf             String       @db.Char(14)
+  dob             DateTime?    @db.Date
+  phone           String?      @db.VarChar(20)
+  address         String?      @db.VarChar(300)
+  function        String       @db.VarChar(100)
+  type            EmployeeType
+  subgroups       String[]     @db.VarChar(100)  // ["Retina", "Catarata"]
+  registro_classe String?      @db.VarChar(20)   // CRM, COREN
+  hire_date       DateTime?    @db.Date
+  login           String?      @unique @db.VarChar(50)
+  password_hash   String?      @db.VarChar(255)
+  permission      String?      @db.VarChar(30)   // "medico", "enfermeiro", "admin"
+  // PJ
+  cnpj            String?      @db.Char(18)
+  pj_tax_regime   TaxRegime?
+  company_name    String?      @db.VarChar(200)
+  company_address String?      @db.VarChar(300)
+
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+  deleted_at DateTime? @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@index([unit_id], name: "idx_team_members_unit")
+  @@map("team_members")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SUS PRODUÇÃO
+//  unit_value existe no banco mas é OCULTO para nível SECRETARIA.
+//  Frontend operacional (SUS – São Camilo) mostra apenas quantidades.
+//  Frontend financeiro (SUS – Financeiro) mostra valores.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model SusConsultation {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id       String   @db.Uuid
+  date          DateTime @db.Date
+  doctor_name   String   @db.VarChar(200)
+  doctor_id     String?  @db.Uuid      // FK Employee (validated in code)
+  secretary_id  String?  @db.Uuid      // FK Employee (validated in code)
+  attendances   Int
+  returns       Int
+  unit_value    Decimal  @db.Decimal(15, 2)
+  month         String   @db.VarChar(7)
+  status        String   @default("DRAFT") @db.VarChar(20)  // DRAFT | CONFIRMED | CANCELED
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@index([unit_id, month], name: "idx_sus_consult_unit_month")
+  @@index([status], name: "idx_sus_consult_status")
+  @@map("sus_consultations")
+}
+
+model SusExam {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id     String   @db.Uuid
+  date        DateTime @db.Date
+  exam_type   String   @db.VarChar(200)
+  doctor_name String   @db.VarChar(200)
+  doctor_id   String?  @db.Uuid
+  quantity    Int
+  unit_value  Decimal  @db.Decimal(15, 2)
+  month       String   @db.VarChar(7)
+  status      String   @default("DRAFT") @db.VarChar(20)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@index([unit_id, month], name: "idx_sus_exams_unit_month")
+  @@index([status], name: "idx_sus_exams_status")
+  @@map("sus_exams")
+}
+
+model SusSurgery {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id         String   @db.Uuid
+  date            DateTime @db.Date
+  procedure_type  String   @db.VarChar(200)
+  doctor_name     String   @db.VarChar(200)
+  doctor_id       String?  @db.Uuid
+  surgery_subtype String?  @db.VarChar(50)  // CATARATA | RETINA | PTERIGIO | ANTI_VEGF
+  quantity        Int
+  unit_value      Decimal  @db.Decimal(15, 2)
+  month           String   @db.VarChar(7)
+  technique       String?  @db.VarChar(100)
+  equipment       String?  @db.VarChar(100)
+  status          String   @default("DRAFT") @db.VarChar(20)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@index([unit_id, month], name: "idx_sus_surg_unit_month")
+  @@index([status], name: "idx_sus_surg_status")
+  @@map("sus_surgeries")
+}
+
+/// Consumo de insumos vinculado a produção SUS (cirurgias, exames, anti-VEGF)
+model SusConsumption {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  production_type String   @db.VarChar(20)   // CONSULTA | EXAME | CIRURGIA
+  production_id   String   @db.Uuid          // FK para SusConsultation/SusExam/SusSurgery
+  stock_item_id   String   @db.Uuid
+  quantity        Int
+  lot             String?  @db.VarChar(30)
+  metadata        String?  @db.Text          // JSON: { lente_model, lote, validade, ... }
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  stock_item StockItem @relation(fields: [stock_item_id], references: [id])
+
+  @@index([production_type, production_id], name: "idx_sus_consumption_prod")
+  @@index([stock_item_id], name: "idx_sus_consumption_item")
+  @@map("sus_consumptions")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  FISCAL + DMED
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model TaxCalculation {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id       String    @db.Uuid
+  competence    String    @db.VarChar(7)
+  regime        TaxRegime
+  gross_revenue Decimal   @db.Decimal(15, 2)
+  tax_type      String    @db.VarChar(30)        // "IRPJ", "CSLL", "ISS", "PIS", "COFINS"
+  base_value    Decimal   @db.Decimal(15, 2)
+  rate          Decimal   @db.Decimal(7, 4)
+  tax_value     Decimal   @db.Decimal(15, 2)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@index([unit_id, competence], name: "idx_tax_calc_unit_comp")
+  @@map("tax_calculations")
+}
+
+model DmedRecord {
+  id                String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id           String  @db.Uuid
+  year              Int
+  cpf_responsavel   String  @db.Char(14)
+  nome_responsavel  String  @db.VarChar(200)
+  nome_beneficiario String  @db.VarChar(200)
+  valor_total       Decimal @db.Decimal(15, 2)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@index([unit_id, year], name: "idx_dmed_unit_year")
+  @@map("dmed_records")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  AUDITORIA — Log geral APPEND-ONLY
+//  Interceptor NestJS grava automaticamente em toda mutação.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model ActivityLog {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id    String? @db.Uuid
+  user_id    String  @db.Uuid
+  action     String  @db.VarChar(50)     // "CREATE", "UPDATE", "DELETE", "APPROVE", "LOGIN"
+  entity     String  @db.VarChar(50)     // "payable", "sale", "surgical_lead"
+  entity_id  String? @db.Uuid
+  details    Json?   @db.JsonB           // { old: {...}, new: {...} }
+  ip_address String? @db.VarChar(45)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  // Sem updated_at — imutável
+
+  unit Unit?      @relation(fields: [unit_id], references: [id])
+  user SystemUser @relation(fields: [user_id], references: [id])
+
+  @@index([entity, entity_id], name: "idx_activity_entity")
+  @@index([user_id, created_at], name: "idx_activity_user_date")
+  @@index([unit_id, created_at], name: "idx_activity_unit_date")
+  @@map("activity_logs")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  REPASSE SUS — regras configuráveis + execução idempotente
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model SusRepasseRule {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id       String    @db.Uuid
+  procedure_key String    @db.VarChar(100)   // CONSULTA, EXAME:OCT, CIRURGIA:CATARATA
+  role          String    @db.VarChar(20)    // DOCTOR | SECRETARY
+  unit_value    Decimal   @db.Decimal(15, 2)
+  valid_from    DateTime  @db.Date
+  valid_to      DateTime? @db.Date
+  is_active     Boolean   @default(true)
+  description   String?   @db.VarChar(300)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  unit Unit @relation(fields: [unit_id], references: [id])
+
+  @@index([unit_id, procedure_key, role], name: "idx_sus_repasse_rule_lookup")
+  @@map("sus_repasse_rules")
+}
+
+model SusRepasseRun {
+  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  unit_id       String  @db.Uuid
+  competence    String  @db.VarChar(7)    // YYYY-MM
+  employee_id   String  @db.Uuid
+  employee_name String  @db.VarChar(200)
+  role          String  @db.VarChar(20)   // DOCTOR | SECRETARY
+  total_value   Decimal @db.Decimal(15, 2)
+  breakdown     String  @db.Text          // JSON: { "CONSULTA": {qty, unit_value, total}, ... }
+  payable_id    String? @db.Uuid
+  status        String  @default("GENERATED") @db.VarChar(20)  // GENERATED | PAID | CANCELED
+
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  unit     Unit     @relation(fields: [unit_id], references: [id])
+  employee Employee @relation(fields: [employee_id], references: [id])
+  payable  Payable? @relation(fields: [payable_id], references: [id])
+
+  @@unique([unit_id, competence, employee_id, role], name: "uq_sus_repasse_run")
+  @@index([unit_id, competence], name: "idx_sus_repasse_run_comp")
+  @@map("sus_repasse_runs")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GOVERNANÇA — RACI matrix
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model RaciMatrix {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  process_name String   @db.VarChar(200)
+  responsible  String   @db.VarChar(200)
+  accountable  String   @db.VarChar(200)
+  consulted    String[] @db.VarChar(200)
+  informed     String[] @db.VarChar(200)
+
+  created_at DateTime @default(now()) @db.Timestamptz
+  updated_at DateTime @updatedAt @db.Timestamptz
+
+  @@map("raci_matrix")
+}
