@@ -89,13 +89,29 @@ export function LeadDrawer({ leadId, onClose, onRefresh }: Props) {
     showToast('Follow-up reagendado para +7 dias');
   };
 
-  // Score breakdown
-  const scoreBreakdown = lead ? [
-    { label: `Interesse ${lead.interest || '—'}`, value: lead.interest === 'alto' ? 15 : lead.interest === 'medio' ? 10 : lead.interest === 'baixo' ? 5 : 0 },
-    { label: lead.has_insurance ? 'Tem convênio' : 'Sem convênio', value: lead.has_insurance ? 10 : 0 },
-    { label: `Prazo ${lead.desired_timeframe || '—'}`, value: lead.desired_timeframe === '0-30' ? 15 : lead.desired_timeframe === '30-60' ? 10 : lead.desired_timeframe === '60+' ? 5 : 0 },
-    { label: `${lead.barriers?.length || 0} barreiras`, value: -(lead.barriers?.length || 0) * 2 },
-  ] : [];
+  // Score breakdown — use score_factors_json if available, else compute client-side
+  const scoreBreakdown = lead ? (() => {
+    const f = lead.score_factors_json;
+    if (f) {
+      return [
+        { label: `Interesse (${lead.interest || '—'})`, value: f.interest },
+        { label: `Prazo (${lead.desired_timeframe || '—'})`, value: f.timeframe },
+        { label: lead.had_return ? 'Fez retorno' : 'Sem retorno', value: f.had_return },
+        { label: 'Contato recente', value: f.contact_recency },
+        { label: lead.has_insurance ? `Convênio (${lead.insurance_name || 'Sim'})` : 'Sem convênio', value: f.insurance },
+        ...(f.barriers_price !== 0 ? [{ label: 'Barreira: Preço', value: f.barriers_price }] : []),
+        ...(f.barriers_fear !== 0 ? [{ label: 'Barreira: Medo', value: f.barriers_fear }] : []),
+        ...(f.barriers_other !== 0 ? [{ label: 'Outras barreiras', value: f.barriers_other }] : []),
+      ].filter((item) => item.value !== 0);
+    }
+    // Fallback: client-side estimate (old format, no had_return/recency)
+    return [
+      { label: `Interesse (${lead.interest || '—'})`, value: lead.interest === 'alto' ? 25 : lead.interest === 'medio' ? 15 : lead.interest === 'baixo' ? 5 : 0 },
+      { label: lead.has_insurance ? `Convênio (${lead.insurance_name || 'Sim'})` : 'Sem convênio', value: lead.has_insurance ? 10 : 0 },
+      { label: `Prazo (${lead.desired_timeframe || '—'})`, value: lead.desired_timeframe === '0-30' ? 20 : lead.desired_timeframe === '30-60' ? 10 : 0 },
+      { label: `Barreiras (${lead.barriers?.length || 0})`, value: lead.barriers?.some((b) => b.toLowerCase().includes('preç')) ? -15 : 0 },
+    ].filter((item) => item.value !== 0);
+  })() : [];
 
   // Follow-up info
   const followupDays = lead?.next_followup ? daysSince(lead.next_followup) : null;
@@ -279,13 +295,13 @@ export function LeadDrawer({ leadId, onClose, onRefresh }: Props) {
                 <div className="mb-3">
                   <div className="flex items-center justify-between text-xs mb-1">
                     <span className="text-slate-500">0</span>
-                    <span className="font-bold text-slate-700">{lead.score}/50</span>
+                    <span className="font-bold text-slate-700">{lead.score}/100</span>
                     <span className="text-slate-500">50</span>
                   </div>
                   <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all ${getScoreColor(lead.score).split(' ')[0]}`}
-                      style={{ width: `${(lead.score / 50) * 100}%` }}
+                      style={{ width: `${lead.score}%` }}
                     />
                   </div>
                 </div>

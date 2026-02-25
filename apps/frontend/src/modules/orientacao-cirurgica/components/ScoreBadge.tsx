@@ -17,7 +17,7 @@ export function ScoreBadge({ score, size = 'md' }: Props) {
   return (
     <div
       className={`${sizes[size]} ${getScoreColor(score)} rounded-full flex items-center justify-center shrink-0 shadow-sm`}
-      title={`Score: ${score}/50`}
+      title={`Score: ${score}/100`}
     >
       {score}
     </div>

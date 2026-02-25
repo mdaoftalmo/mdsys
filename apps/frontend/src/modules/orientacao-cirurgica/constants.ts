@@ -30,8 +30,8 @@ export const STATUS_CONFIG: Record<LeadStatus, {
 
 // ── Score thresholds ──
 export const SCORE_THRESHOLDS = {
-  high: 35,    // green badge
-  medium: 20,  // yellow badge
+  high: 60,    // green badge (60-100)
+  medium: 35,  // yellow badge (35-59)
   // below medium = red badge
 } as const;
 

@@ -31,6 +31,12 @@ export interface SurgicalLead {
   eye?: string;
   status: LeadStatus;
   score: number;
+  score_factors_json?: {
+    interest: number; insurance: number; timeframe: number; had_return: number;
+    contact_recency: number; barriers_price: number; barriers_fear: number;
+    barriers_other: number; total: number;
+  } | null;
+  had_return?: boolean;
   interest?: string;
   barriers: string[];
   has_insurance: boolean;

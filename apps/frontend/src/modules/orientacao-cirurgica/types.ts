@@ -10,7 +10,7 @@ export type LeadStatus =
 
 export type ContactChannel = 'Telefone' | 'WhatsApp' | 'Presencial' | 'Email';
 export type Interest = 'alto' | 'medio' | 'baixo';
-export type Timeframe = '0-30' | '30-60' | '60+';
+export type Timeframe = '0-30' | '30-60' | '31-90' | '60+' | '90+';
 export type Eye = 'OD' | 'OE' | 'AO';
 
 // ── Models (from API response) ──
@@ -40,6 +40,17 @@ export interface SurgicalLead {
   eye: string | null;
   status: LeadStatus;
   score: number;
+  score_factors_json?: {
+    interest: number;
+    insurance: number;
+    timeframe: number;
+    had_return: number;
+    contact_recency: number;
+    barriers_price: number;
+    barriers_fear: number;
+    barriers_other: number;
+    total: number;
+  } | null;
   interest: Interest | null;
   barriers: string[];
   has_insurance: boolean;

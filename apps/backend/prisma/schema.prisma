@@ -1020,7 +1020,8 @@ model SurgicalLead {
   procedure          String?             @db.VarChar(200)
   eye                String?             @db.VarChar(10)  // "OD", "OE", "AO"
   status             SurgicalLeadStatus  @default(PRIMEIRA)
-  score              Int                 @default(0)      // 0-50 (IA scoring)
+  score              Int                 @default(0)      // 0-100 (scoring)
+  score_factors_json Json?               @db.JsonB        // breakdown: {interest, insurance, timeframe, barriers, had_return, contact_time}
   interest           String?             @db.VarChar(20)  // "alto", "medio", "baixo"
   barriers           String[]            @db.VarChar(100) // ["Preço", "Medo", "Agenda"]
   has_insurance      Boolean             @default(false)

@@ -205,19 +205,38 @@ async function main() {
   // 9. DEMO SURGICAL LEADS (5 leads)
   // ══════════════════════════════════════════════
   const leadsData = [
-    { name: 'Maria Aparecida Santos', phone: '(11) 99881-1234', pathology: 'Catarata', eye: 'OD', status: 'PRIMEIRA', score: 75 },
-    { name: 'José Carlos Ferreira', phone: '(11) 99882-5678', pathology: 'Catarata Bilateral', eye: 'AO', status: 'RETORNO', score: 90 },
-    { name: 'Ana Paula Oliveira', phone: '(11) 99883-9012', pathology: 'Pterígio', eye: 'OE', status: 'EXAMES', score: 60 },
-    { name: 'Roberto Almeida', phone: '(11) 99884-3456', pathology: 'Glaucoma', eye: 'OD', status: 'ORCAMENTO', score: 85 },
-    { name: 'Francisca Lima', phone: '(11) 99885-7890', pathology: 'Descolamento Retina', eye: 'OD', status: 'FECHOU', score: 95 },
+    { name: 'Maria Aparecida Santos', phone: '(11) 99881-1234', pathology: 'Catarata', eye: 'OD', status: 'PRIMEIRA', interest: 'alto', has_insurance: false, desired_timeframe: '0-30', barriers: [] },
+    { name: 'José Carlos Ferreira', phone: '(11) 99882-5678', pathology: 'Catarata Bilateral', eye: 'AO', status: 'RETORNO', interest: 'alto', has_insurance: true, insurance_name: 'UNIMED', desired_timeframe: '0-30', barriers: [] },
+    { name: 'Ana Paula Oliveira', phone: '(11) 99883-9012', pathology: 'Pterígio', eye: 'OE', status: 'INDECISO', interest: 'medio', has_insurance: false, desired_timeframe: '31-90', barriers: ['Preço', 'Medo'] },
+    { name: 'Roberto Almeida', phone: '(11) 99884-3456', pathology: 'Glaucoma', eye: 'OD', status: 'PROPENSO', interest: 'alto', has_insurance: true, insurance_name: 'BRADESCO', desired_timeframe: '0-30', barriers: [] },
+    { name: 'Francisca Lima', phone: '(11) 99885-7890', pathology: 'Descolamento Retina', eye: 'OD', status: 'FECHOU', interest: 'alto', has_insurance: false, desired_timeframe: '0-30', barriers: [] },
+    { name: 'Carlos Eduardo Rocha', phone: '(11) 99887-1111', pathology: 'Catarata', eye: 'OE', status: 'INDECISO', interest: 'baixo', has_insurance: false, desired_timeframe: '90+', barriers: ['Preço', 'Agenda'] },
+    { name: 'Benedita Sousa', phone: '(11) 99887-2222', pathology: 'Anti-VEGF', eye: 'OD', status: 'PROPENSO', interest: 'alto', has_insurance: true, insurance_name: 'CASSI', desired_timeframe: '0-30', barriers: [] },
+    { name: 'Raimundo Pinto', phone: '(11) 99887-3333', pathology: 'Pterígio', eye: 'OD', status: 'PERDIDO', interest: 'baixo', has_insurance: false, desired_timeframe: '90+', barriers: ['Preço', 'Medo', 'Agenda'] },
   ];
 
   for (const l of leadsData) {
+    // Simple score calculation for seed
+    const interestScore = l.interest === 'alto' ? 25 : l.interest === 'medio' ? 15 : 5;
+    const timeframeScore = l.desired_timeframe === '0-30' ? 20 : l.desired_timeframe === '31-90' ? 10 : 0;
+    const insuranceScore = l.has_insurance ? 10 : 0;
+    const hasPrice = l.barriers.some((b: string) => b.toLowerCase().includes('preç'));
+    const hasFear = l.barriers.some((b: string) => b.toLowerCase() === 'medo');
+    const otherBarriers = l.barriers.filter((b: string) => !b.toLowerCase().includes('preç') && b.toLowerCase() !== 'medo').length;
+    const barrierScore = (hasPrice ? -15 : 0) + (hasFear ? -10 : 0) + (otherBarriers * -3);
+    const score = Math.min(100, Math.max(0, interestScore + timeframeScore + insuranceScore + barrierScore));
+
     await prisma.surgicalLead.create({
       data: {
         unit_id: u0, name: l.name, phone: l.phone, pathology: l.pathology,
-        eye: l.eye as any, status: l.status as any, score: l.score,
-        next_followup: l.status !== 'FECHOU' ? new Date(Date.now() + 3 * 86400000) : null,
+        eye: l.eye as any, status: l.status as any, score,
+        interest: l.interest as any, has_insurance: l.has_insurance,
+        insurance_name: (l as any).insurance_name || null,
+        desired_timeframe: l.desired_timeframe as any,
+        barriers: l.barriers,
+        lost_reason: l.status === 'PERDIDO' ? 'Sem interesse após múltiplos contatos' : null,
+        indication_date: new Date(Date.now() - Math.random() * 60 * 86400000),
+        next_followup: l.status !== 'FECHOU' && l.status !== 'PERDIDO' ? new Date(Date.now() + 7 * 86400000) : null,
       },
     });
   }

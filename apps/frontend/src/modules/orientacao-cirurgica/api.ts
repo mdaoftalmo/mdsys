@@ -110,3 +110,26 @@ export const scheduleFollowup = (leadId: string, date: string) =>
     method: 'PATCH',
     body: JSON.stringify({ date }),
   });
+
+// ── Call queue ──
+export const getCallQueue = (date?: string) => {
+  const params = date ? `?date=${date}` : '';
+  return request<SurgicalLead[]>(`${PREFIX}/call-queue${params}`);
+};
+
+// ── Analytics / KPIs ──
+export interface AnalyticsSummary {
+  summary: {
+    total: number; fechou: number; perdido: number; pipeline: number;
+    conversion_pct: number; overdue_contacts: number;
+    followup_overdue: number; avg_days_to_close: number | null;
+  };
+  by_status: { status: string; count: number; avg_score: number }[];
+  pathology_breakdown: {
+    pathology: string; total: number; fechou: number; perdido: number;
+    pipeline: number; conversion_pct: number;
+  }[];
+  lost_reasons: { reason: string; count: number; pct: number }[];
+}
+export const getAnalytics = () =>
+  request<AnalyticsSummary>(`${PREFIX}/analytics`);

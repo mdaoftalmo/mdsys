@@ -117,7 +117,7 @@ export function contactUrgencyClass(daysSinceContact: number | null): {
 }
 
 export function scoreBadgeClass(score: number): string {
-  if (score >= 35) return 'bg-green-100 text-green-800 border-green-300';
-  if (score >= 20) return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+  if (score >= 60) return 'bg-green-100 text-green-800 border-green-300';
+  if (score >= 35) return 'bg-yellow-100 text-yellow-800 border-yellow-300';
   return 'bg-red-100 text-red-800 border-red-300';
 }

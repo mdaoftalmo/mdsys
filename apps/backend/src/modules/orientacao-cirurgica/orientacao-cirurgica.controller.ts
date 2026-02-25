@@ -125,4 +125,23 @@ export class OrientacaoCirurgicaController {
   ) {
     return this.service.scheduleFollowup(id, unitId, date);
   }
+
+  // ── Call Queue (fila de ligações do dia) ──
+
+  @Get('call-queue')
+  @ApiOperation({ summary: 'Fila de ligações do dia (leads que precisam de contato)' })
+  async getCallQueue(
+    @UnitScope() unitId: string,
+    @Query('date') date?: string,
+  ) {
+    return this.service.getCallQueue(unitId, date);
+  }
+
+  // ── Analytics / KPIs ──
+
+  @Get('analytics')
+  @ApiOperation({ summary: 'KPIs e métricas do funil cirúrgico' })
+  async getAnalytics(@UnitScope() unitId: string) {
+    return this.service.getAnalytics(unitId);
+  }
 }
